@@ -77,11 +77,34 @@ def getProbabilities(pixels, frame, result):
         if pixel.kernelGetProbability(frame[pixel.row][pixel.column])<threshold:
             result[i] = 255
 
+def getNeighbourIndices(arrShape, i, j):
+    n = arrShape[0]
+    m = arrShape[1]
+
+    neighbours = []
+    for dx in range (-1 if (i > 0) else 0 , 2 if (i < n-1) else 1):
+        for dy in range( -1 if (j > 0) else 0,2 if (j < m-1) else 1):
+            if (dx != 0 or dy != 0):
+                neighbours.append((i + dx,j + dy))
+    return neighbours
+
+def removeFalseDetection(pixels, resMatrix, frame, retArray, startIndex, count):
+    for i in range(startIndex, startIndex+count):
+        pixel = pixels[i]
+        if resMatrix[pixel.row][pixel.column]==255:
+            probabilities = []
+            neighbours = getNeighbourIndices(resMatrix.shape, pixel.row, pixel.column)
+            for neighbour in neighbours:
+                probabilities.append(pixels[(neighbour[0]*frame.shape[1])+neighbour[1]].kernelGetProbability(frame[pixel.row][pixel.column]))
+            maxima = max(probabilities)
+            if maxima>0.01:
+                retArray[(pixel.row*frame.shape[1])+pixel.column] = 1
+
 #Running on given dataset
 if __name__ == '__main__':
     pixelDataList = []
 
-    init_frame = cv2.imread('col dataset\COL780 Dataset\HighwayI\HighwayI\input\in000000.png', cv2.IMREAD_COLOR)
+    init_frame = cv2.imread('col dataset\COL780 Dataset\Candela_m1.10\Candela_m1.10\input\Candela_m1.10_000000.png', cv2.IMREAD_COLOR)
 
     rows = init_frame.shape[0]
     columns = init_frame.shape[1]
@@ -90,7 +113,7 @@ if __name__ == '__main__':
         for column in range(columns):
             pixelDataList.append(PixelData(row, column))
 
-    for i in range(n):
+    for i in range(2):
         for pixel in pixelDataList:
             pixel.addValue(init_frame[pixel.row][pixel.column])
             # cv2.imshow('video',init_frame)
@@ -102,11 +125,11 @@ if __name__ == '__main__':
     frameNo = 0
     while(1):
         if frameNo <10:
-            frame_path = 'col dataset\COL780 Dataset\HighwayI\HighwayI\input\in00000' + str(frameNo) +'.png'
+            frame_path = 'col dataset\COL780 Dataset\Candela_m1.10\Candela_m1.10\input\Candela_m1.10_00000' + str(frameNo) +'.png'
         elif frameNo <100:
-            frame_path = 'col dataset\COL780 Dataset\HighwayI\HighwayI\input\in0000' + str(frameNo) +'.png'
+            frame_path = 'col dataset\COL780 Dataset\Candela_m1.10\Candela_m1.10\input\Candela_m1.10_0000' + str(frameNo) +'.png'
         else:
-            frame_path = 'col dataset\COL780 Dataset\HighwayI\HighwayI\input\in000' + str(frameNo) +'.png'
+            frame_path = 'col dataset\COL780 Dataset\Candela_m1.10\Candela_m1.10\input\Candela_m1.10_000' + str(frameNo) +'.png'
 
         current_frame = cv2.imread(frame_path, cv2.IMREAD_COLOR)
         if current_frame is None:
@@ -126,10 +149,6 @@ if __name__ == '__main__':
         for process in processes:
             process.start()
 
-        for pixel in pixelDataList:
-            pixel.addValue(current_frame[pixel.row][pixel.column])
-            pixel.updateSigma()
-
         for process in processes:
             process.join()
 
@@ -137,10 +156,37 @@ if __name__ == '__main__':
             for j in range(len(processRes[i])):
                 if(processRes[i][j]==255):
                     res[splitted_lists[i][j].row][splitted_lists[i][j].column]=255
+        
+        removalThreads = 2
+        # splitted_lists = np.array_split(pixelDataList,removalThreads)
+        false_detect = multiprocessing.Array('i', len(pixelDataList))
+        # for i in range(removalThreads):
+            # false_detect.append()
 
-        cv2.imshow('video',current_frame)
-        cv2.imshow('out', res)
-        cv2.waitKey(1)
+        processes = []
+        for i in range(removalThreads):
+            processes.append(multiprocessing.Process(target = removeFalseDetection, args=(pixelDataList, res, current_frame, false_detect, int((len(pixelDataList)/removalThreads)*i), int(len(pixelDataList)/removalThreads))))
+        
+        for process in processes:
+            process.start()
+        
+        for pixel in pixelDataList:
+            pixel.addValue(current_frame[pixel.row][pixel.column])
+            pixel.updateSigma()
+
+        print("updated")
+        
+        for process in processes:
+            process.join()
+
+        print("complete false detect")
+        for i in range(len(pixelDataList)):
+            if false_detect[i]==1:
+                res[pixelDataList[i].row][pixelDataList[i].column]=0
+
+        # cv2.imshow('video',current_frame)
+        # cv2.imshow('out', res)
+        # cv2.waitKey(1)
         outPath = './output/out'+str(frameNo)+'.png'
         cv2.imwrite(outPath,res)
         frameNo = frameNo+1
