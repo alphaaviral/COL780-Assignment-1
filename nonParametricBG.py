@@ -17,9 +17,13 @@ for row in datareader:
 lookupData = np.asarray(lookupData, dtype=float)
 
 global threshold
-threshold = 0.00001
-defaultSigma = 1.2
+threshold = 0.000001
+defaultSigma = 0.1
 n = 20
+global chromaticityAlpha
+global chromaticityBeta
+chromaticityAlpha = 0.5
+chromaticityBeta = 2
 
 class PixelData:
     def __init__(self, row, column):
@@ -28,47 +32,80 @@ class PixelData:
         self.row = row
         self.column = column
         self.diff = np.zeros((0,3))
+        # self.relevantHistory = np.zeros((0,3))
+        # self.relevantSigma = []
+        
+    def getRelevantData(self, value):
+        relevantHistory = np.zeros((0,3))
+        relevantDifference = np.zeros((0,2))
+        relevantSigma = []
+        global chromaticityAlpha
+        global chromaticityBeta
+        for i in range(0, len(self.pastValues)):
+            ratio = 1.0*value[2]/self.pastValues[i][2]
+            if ratio>=chromaticityAlpha and ratio <=chromaticityBeta:
+                relevantHistory = np.append(relevantHistory, [self.pastValues[i]], axis=0)
+        
+        if len(relevantHistory) < 2:
+            relevantSigma = [0,0]
+        
+        else:
+            for i in range(0, len(relevantHistory)-1):
+                difference = [abs(relevantHistory[i][0] - relevantHistory[i+1][0]), abs(relevantHistory[i][1] - relevantHistory[i+1][1])]
+                relevantDifference = np.append(relevantDifference, [difference], axis=0)
+            
+            med = np.median(relevantDifference, axis=0)
+            relevantSigma = med/(0.68*np.power(2,0.5))
+        
+        for i in range(len(relevantSigma)):
+            if relevantSigma[i]==0:
+                relevantSigma[i] = defaultSigma
+
+        return relevantHistory, relevantSigma
 
     def kernelGetProbability(self,currentValue):
+        relevantHistory, relevantSigma = self.getRelevantData(currentValue)
         sum=0
-        for i in range(0,len(self.pastValues)):
-            product = 1
-            for index in range(0,3):
-                difference = abs(int(currentValue[index]-self.pastValues[i][index]))
-                for j in range(len(self.sigma)):
-                    self.sigma[j] = round(self.sigma[j],1)
-                sigIndex = int((self.sigma[index]*10)-1)
-                product = product * lookupData[difference][sigIndex]
-                # product = product*(1.0*(np.exp((np.power(currentValue[index]-self.pastValues[i][index],2.0))/(-1*2*(np.power(self.sigma[index],2.0)))))/(np.power(2*np.pi,0.5)*self.sigma[index]))
-            sum = sum+(1.0*product/len(self.pastValues))
-            if sum>threshold:
-                return threshold+0.1
-        return sum
+        global threshold
+
+        if len(relevantHistory) == 0:
+            return 0
+        
+        else:
+            # for j in range(len(relevantSigma)):
+            #     relevantSigma[j] = round(relevantSigma[j],1)
+
+            for i in range(0,len(relevantHistory)):
+                product = 1
+                for index in range(0,2):
+                    difference = abs(currentValue[index]-relevantHistory[i][index])
+                    # sigIndex = int((relevantSigma[index]*10)-1)
+                    # product = product * lookupData[difference][sigIndex]
+                    product = product * (1.0*(np.exp((np.power(difference,2.0))/(-1*2*(np.power(relevantSigma[index],2.0)))))/(np.power(2*np.pi,0.5)*relevantSigma[index]))
+                sum = sum+(1.0*product/len(relevantHistory))
+
+                if sum>threshold:
+                    return threshold+0.1
+        
+            return sum
     
-    def updateSigma(self):
-        med = np.median(self.diff, axis = 0)
-        # if 0 in med:
-        #     self.sigma = defaultSigma
-        # else:
-        self.sigma = med/(0.68*np.power(2,0.5))
-        for i in range(len(self.sigma)):
-            if self.sigma[i]==0:
-                self.sigma[i] = defaultSigma
+    # def updateSigma(self):
+    #     med = np.median(self.diff, axis = 0)
+    #     self.sigma = med/(0.68*np.power(2,0.5))
+    #     for i in range(len(self.sigma)):
+    #         if self.sigma[i]==0:
+    #             self.sigma[i] = defaultSigma
 
     def addValue(self, value):
         if self.pastValues.shape[0]>=n:
             self.pastValues = np.delete(self.pastValues,0,0)
-            self.diff = np.delete(self.diff, 0,0)
+            # self.diff = np.delete(self.diff, 0,0)
 
         self.pastValues = np.append(self.pastValues, [value], axis=0)
-        if self.pastValues.shape[0]>1:
-            difference = [abs(self.pastValues[-1][0] - self.pastValues[-2][0]), abs(self.pastValues[-1][1] - self.pastValues[-2][1]), abs(self.pastValues[-1][2] - self.pastValues[-2][2])]
-            self.diff = np.append(self.diff, [difference], axis=0)
+        # if self.pastValues.shape[0]>1:
+        #     difference = [abs(self.pastValues[-1][0] - self.pastValues[-2][0]), abs(self.pastValues[-1][1] - self.pastValues[-2][1]), abs(self.pastValues[-1][2] - self.pastValues[-2][2])]
+        #     self.diff = np.append(self.diff, [difference], axis=0)
 
-# def getProbability(pixel, frame, result):
-#     global threshold
-#     if pixel.kernelGetProbability(frame[pixel.row][pixel.column])<threshold:
-#         result.value = 255
 
 def getProbabilities(pixels, frame, result):
     global threshold
@@ -100,11 +137,28 @@ def removeFalseDetection(pixels, resMatrix, frame, retArray, startIndex, count):
             if maxima>0.01:
                 retArray[(pixel.row*frame.shape[1])+pixel.column] = 1
 
+def transformToChromaticity(image):
+    height = image.shape[0]
+    width = image.shape[1]
+    res = np.zeros(image.shape, dtype=np.float64)
+    for i in range(height):
+        for j in range(width):
+            sum = int(image[i][j][0])+int(image[i][j][1])+int(image[i][j][2])
+            if sum==0:
+                res[i][j] = [0.,0.,0.]
+            else:
+                res[i][j][0] = 1.0*int(image[i][j][2])/sum
+                res[i][j][1] = 1.0*int(image[i][j][1])/sum
+                res[i][j][2] = sum
+    return res
+
+
 #Running on given dataset
 if __name__ == '__main__':
     pixelDataList = []
 
-    init_frame = cv2.imread('col dataset\COL780 Dataset\Candela_m1.10\Candela_m1.10\input\Candela_m1.10_000000.png', cv2.IMREAD_COLOR)
+    init_frame = cv2.imread('col dataset\COL780 Dataset\HighwayI\HighwayI\input\in000000.png', cv2.IMREAD_COLOR)
+    init_frame = transformToChromaticity(init_frame)
 
     rows = init_frame.shape[0]
     columns = init_frame.shape[1]
@@ -119,70 +173,77 @@ if __name__ == '__main__':
             # cv2.imshow('video',init_frame)
             # cv2.waitKey(50)
 
-    for pixel in pixelDataList:
-        pixel.updateSigma()
+    # for pixel in pixelDataList:
+    #     pixel.updateSigma()
 
     frameNo = 0
     while(1):
         if frameNo <10:
-            frame_path = 'col dataset\COL780 Dataset\Candela_m1.10\Candela_m1.10\input\Candela_m1.10_00000' + str(frameNo) +'.png'
+            frame_path = 'col dataset\COL780 Dataset\HighwayI\HighwayI\input\in00000' + str(frameNo) +'.png'
         elif frameNo <100:
-            frame_path = 'col dataset\COL780 Dataset\Candela_m1.10\Candela_m1.10\input\Candela_m1.10_0000' + str(frameNo) +'.png'
+            frame_path = 'col dataset\COL780 Dataset\HighwayI\HighwayI\input\in0000' + str(frameNo) +'.png'
         else:
-            frame_path = 'col dataset\COL780 Dataset\Candela_m1.10\Candela_m1.10\input\Candela_m1.10_000' + str(frameNo) +'.png'
+            frame_path = 'col dataset\COL780 Dataset\HighwayI\HighwayI\input\in000' + str(frameNo) +'.png'
 
         current_frame = cv2.imread(frame_path, cv2.IMREAD_COLOR)
         if current_frame is None:
             break
-        
+
+        current_frame = transformToChromaticity(current_frame)
         res = np.zeros((init_frame.shape[0],init_frame.shape[1]))
-        processnumber = 4
-        splitted_lists = np.array_split(pixelDataList,processnumber)
-        processRes = []
-        for i in range(processnumber):
-            processRes.append(multiprocessing.Array('i', int(len(pixelDataList)/processnumber)))
-
-        processes = []
-        for i in range(processnumber):
-            processes.append(multiprocessing.Process(target = getProbabilities, args=(splitted_lists[i], current_frame, processRes[i])))
-       
-        for process in processes:
-            process.start()
-
-        for process in processes:
-            process.join()
-
-        for i in range(4):
-            for j in range(len(processRes[i])):
-                if(processRes[i][j]==255):
-                    res[splitted_lists[i][j].row][splitted_lists[i][j].column]=255
-        
-        removalThreads = 2
-        # splitted_lists = np.array_split(pixelDataList,removalThreads)
-        false_detect = multiprocessing.Array('i', len(pixelDataList))
-        # for i in range(removalThreads):
-            # false_detect.append()
-
-        processes = []
-        for i in range(removalThreads):
-            processes.append(multiprocessing.Process(target = removeFalseDetection, args=(pixelDataList, res, current_frame, false_detect, int((len(pixelDataList)/removalThreads)*i), int(len(pixelDataList)/removalThreads))))
-        
-        for process in processes:
-            process.start()
         
         for pixel in pixelDataList:
+            if pixel.kernelGetProbability(current_frame[pixel.row][pixel.column])<threshold:
+                res[pixel.row][pixel.column] = 255
+        # processnumber = 4
+        # splitted_lists = np.array_split(pixelDataList,processnumber)
+        # processRes = []
+        # for i in range(processnumber):
+        #     processRes.append(multiprocessing.Array('i', int(len(pixelDataList)/processnumber)))
+
+        # processes = []
+        # for i in range(processnumber):
+        #     processes.append(multiprocessing.Process(target = getProbabilities, args=(splitted_lists[i], current_frame, processRes[i])))
+       
+        # for process in processes:
+        #     process.start()
+
+        for pixel in pixelDataList:
             pixel.addValue(current_frame[pixel.row][pixel.column])
-            pixel.updateSigma()
 
-        print("updated")
+        # for process in processes:
+        #     process.join()
+
+        # for i in range(processnumber):
+        #     for j in range(len(processRes[i])):
+        #         if(processRes[i][j]==255):
+        #             res[splitted_lists[i][j].row][splitted_lists[i][j].column]=255
         
-        for process in processes:
-            process.join()
 
-        print("complete false detect")
-        for i in range(len(pixelDataList)):
-            if false_detect[i]==1:
-                res[pixelDataList[i].row][pixelDataList[i].column]=0
+        # removalThreads = 4
+        # false_detect = multiprocessing.Array('i', len(pixelDataList))
+
+        # processes = []
+        # for i in range(removalThreads):
+        #     processes.append(multiprocessing.Process(target = removeFalseDetection, args=(pixelDataList, res, current_frame, false_detect, int((len(pixelDataList)/removalThreads)*i), int(len(pixelDataList)/removalThreads))))
+        
+        # for process in processes:
+        #     process.start()
+        
+        # for pixel in pixelDataList:
+        #     pixel.addValue(current_frame[pixel.row][pixel.column])
+        #     pixel.updateSigma()
+
+        # print("updated")
+        
+        # for process in processes:
+        #     process.join()
+
+        # print("complete false detect")
+        # for i in range(len(pixelDataList)):
+        #     if false_detect[i]==1:
+        #         res[pixelDataList[i].row][pixelDataList[i].column]=0
+
 
         # cv2.imshow('video',current_frame)
         # cv2.imshow('out', res)
